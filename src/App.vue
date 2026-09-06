@@ -12,7 +12,7 @@ const scrollBox = ref(null)
 const sidebarOpen = ref(false)
 const inputBox = ref(null)
 
-// 模型选择：zhipu=智谱 GLM-4.7-Flash（免费，默认），deepseek=DeepSeek（付费，需授权）
+// 模型选择：zhipu=智谱 GLM-4.7-Flash（免费，默认），glm4flash=GLM-4-Flash（免费备选），deepseek=DeepSeek（付费，需授权）
 const model = ref('zhipu')
 const MODELS = [
   { id: 'zhipu', label: 'GLM-4.7', icon: '⚡', tip: '智谱 GLM-4.7-Flash · 免费' },
@@ -232,7 +232,11 @@ async function send() {
       content: data.reply || '（无回复内容）',
       provider: data.provider || '',
       ragUsed: !!data.ragUsed,
-      fallback: model.value === 'deepseek' && data.provider !== 'deepseek'
+      fallback: model.value === 'deepseek' && data.provider !== 'deepseek',
+      // AI 请求写入笔记的草稿（两阶段写入），渲染为确认卡片
+      pendingNotes: (Array.isArray(data.pendingNotes) && data.pendingNotes.length)
+        ? data.pendingNotes
+        : null
     }
     await loadSessions()
   } catch {
@@ -245,6 +249,46 @@ async function send() {
     sending.value = false
     scrollToBottom()
   }
+}
+
+// 确认/拒绝 AI 写入（豁免接口，无需管理面令牌；一次性操作）
+async function confirmNote(note) {
+  if (note._done || note._busy) return
+  note._busy = true
+  try {
+    const res = await fetch('/api/vault/note/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pendingId: note.id })
+    })
+    const text = await res.text()
+    if (res.ok) {
+      const data = JSON.parse(text)
+      applyIndexInfo(data)
+      note._done = '✅ 已写入 ' + data.path
+    } else {
+      note._done = '⚠️ ' + (text || '操作失败')
+    }
+  } catch {
+    note._done = '⚠️ 网络错误'
+  }
+  note._busy = false
+}
+
+async function rejectNote(note) {
+  if (note._done || note._busy) return
+  note._busy = true
+  try {
+    const res = await fetch('/api/vault/note/reject', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pendingId: note.id })
+    })
+    note._done = res.ok ? '已拒绝，未写入知识库' : '⚠️ 操作失败'
+  } catch {
+    note._done = '⚠️ 网络错误'
+  }
+  note._busy = false
 }
 
 function clearMemory() {
@@ -280,7 +324,7 @@ function scrollToBottom() {
   })
 }
 
-// ---------- RAG 知识库设置卡片 ----------
+// ---------- RAG 知识库管理（密钥门禁） ----------
 const ragCardOpen = ref(false)
 const ragLoading = ref(false)
 const ragStatus = ref(null) // { enabled, vaultPath, files, chunks, lastError }
@@ -290,6 +334,44 @@ const newPattern = ref('')
 const newRemark = ref('')
 const ragError = ref('')
 const pendingDeleteId = ref(null)
+const vaultTab = ref('files')
+
+// 门禁会话：密钥 → 令牌（sessionStorage，30 分钟滑动续期，后端重启即失效）
+const vaultToken = ref(sessionStorage.getItem('vaultToken') || '')
+const vaultLocked = ref(true)
+const vaultKey = ref('')
+const keyError = ref('')
+const keySubmitting = ref(false)
+
+// 已加入索引的保护目录（本地记忆，用于展示「移出索引」；持久化在 localStorage）
+const protectAdded = ref(JSON.parse(localStorage.getItem('vaultProtectAdded') || '[]'))
+
+function saveProtectAdded() {
+  localStorage.setItem('vaultProtectAdded', JSON.stringify(protectAdded.value))
+}
+
+function authHeaders(extra = {}) {
+  const h = { ...extra }
+  if (vaultToken.value) h['X-Vault-Token'] = vaultToken.value
+  return h
+}
+
+// 带令牌的管理请求：401 = 令牌失效/未解锁 → 回锁屏
+async function vaultFetch(url, options = {}) {
+  const res = await fetch(url, { ...options, headers: authHeaders(options.headers) })
+  if (res.status === 401) {
+    lockVault('会话已过期，请重新输入密钥')
+    throw new Error('locked')
+  }
+  return res
+}
+
+function lockVault(message) {
+  vaultToken.value = ''
+  sessionStorage.removeItem('vaultToken')
+  vaultLocked.value = true
+  if (message) ragError.value = message
+}
 
 // 增删改的响应里自带重建后的 files/chunks，直接刷新状态区，不必再调 refresh
 function applyIndexInfo(data) {
@@ -303,26 +385,72 @@ async function openRagCard() {
   ragCardOpen.value = true
   sidebarOpen.value = false
   ragError.value = ''
-  await loadRagCard()
-}
-
-async function loadRagCard() {
+  keyError.value = ''
   ragLoading.value = true
   try {
-    const [statusRes, patternsRes] = await Promise.all([
-      fetch('/api/rag/status'),
-      fetch('/api/rag/patterns')
-    ])
-    if (statusRes.ok) ragStatus.value = await statusRes.json()
-    if (patternsRes.ok) {
-      const data = await patternsRes.json()
-      ragBase.value = data.basePatterns || []
-      ragRules.value = data.patterns || []
+    const res = await fetch('/api/rag/status', { headers: authHeaders() })
+    if (res.status === 401) {
+      lockVault() // 未解锁/令牌过期 → 锁屏
+      return
     }
+    if (!res.ok) {
+      ragError.value = '后端状态异常（HTTP ' + res.status + '）'
+      return
+    }
+    ragStatus.value = await res.json()
+    vaultLocked.value = false
+    await Promise.all([loadPatterns(), loadTree()])
   } catch {
     ragError.value = '⚠️ 无法连接后端服务，请确认 Java 服务（8080）已启动。'
   } finally {
     ragLoading.value = false
+  }
+}
+
+async function unlockVault() {
+  const key = vaultKey.value
+  if (!key || keySubmitting.value) return
+  keySubmitting.value = true
+  keyError.value = ''
+  try {
+    const res = await fetch('/api/vault/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      vaultToken.value = data.token
+      sessionStorage.setItem('vaultToken', data.token)
+      vaultKey.value = ''
+      vaultLocked.value = false
+      ragLoading.value = true
+      try {
+        const s = await fetch('/api/rag/status', { headers: authHeaders() })
+        if (s.ok) ragStatus.value = await s.json()
+        await Promise.all([loadPatterns(), loadTree()])
+      } finally {
+        ragLoading.value = false
+      }
+    } else {
+      // 401 / 429 的响应体是纯文本提示，直接展示
+      keyError.value = (await res.text()) || '解锁失败'
+    }
+  } catch {
+    keyError.value = '⚠️ 无法连接后端服务'
+  }
+  keySubmitting.value = false
+}
+
+async function loadPatterns() {
+  try {
+    const res = await vaultFetch('/api/rag/patterns')
+    if (!res.ok) return
+    const data = await res.json()
+    ragBase.value = data.basePatterns || []
+    ragRules.value = data.patterns || []
+  } catch {
+    // locked 已由 vaultFetch 统一处理
   }
 }
 
@@ -331,7 +459,7 @@ async function addPattern() {
   if (!pattern || ragLoading.value) return
   ragError.value = ''
   try {
-    const res = await fetch('/api/rag/patterns', {
+    const res = await vaultFetch('/api/rag/patterns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pattern, remark: newRemark.value.trim() })
@@ -346,15 +474,15 @@ async function addPattern() {
       // 400 的响应体是纯文本提示，直接展示
       ragError.value = (await res.text()) || '添加失败'
     }
-  } catch {
-    ragError.value = '⚠️ 无法连接后端服务'
+  } catch (e) {
+    if (e.message !== 'locked') ragError.value = '⚠️ 无法连接后端服务'
   }
 }
 
 async function togglePattern(row) {
   ragError.value = ''
   try {
-    const res = await fetch('/api/rag/patterns/' + row.id, {
+    const res = await vaultFetch('/api/rag/patterns/' + row.id, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: !row.enabled })
@@ -365,19 +493,19 @@ async function togglePattern(row) {
       if (idx !== -1) ragRules.value[idx] = data.row
       applyIndexInfo(data)
     } else if (res.status === 404) {
-      await loadRagCard() // 规则已被别处删除，刷新列表
+      await loadPatterns() // 规则已被别处删除，刷新列表
     } else {
       ragError.value = (await res.text()) || '操作失败'
     }
-  } catch {
-    ragError.value = '⚠️ 无法连接后端服务'
+  } catch (e) {
+    if (e.message !== 'locked') ragError.value = '⚠️ 无法连接后端服务'
   }
 }
 
 async function deletePattern(row) {
   ragError.value = ''
   try {
-    const res = await fetch('/api/rag/patterns/' + row.id, { method: 'DELETE' })
+    const res = await vaultFetch('/api/rag/patterns/' + row.id, { method: 'DELETE' })
     if (res.ok) {
       const data = await res.json()
       ragRules.value = ragRules.value.filter((r) => r.id !== row.id)
@@ -387,10 +515,128 @@ async function deletePattern(row) {
     } else {
       ragError.value = (await res.text()) || '删除失败'
     }
-  } catch {
-    ragError.value = '⚠️ 无法连接后端服务'
+  } catch (e) {
+    if (e.message !== 'locked') ragError.value = '⚠️ 无法连接后端服务'
   } finally {
     pendingDeleteId.value = null
+  }
+}
+
+// ---------- 文件树 ----------
+const treeLoading = ref(false)
+const treeRoot = ref('')
+const treeNodes = ref([])
+const newNoteOpen = ref(false)
+const notePath = ref('')
+const noteContent = ref('')
+
+async function loadTree() {
+  treeLoading.value = true
+  try {
+    const res = await vaultFetch('/api/vault/tree')
+    if (res.ok) {
+      const data = await res.json()
+      treeRoot.value = data.root || ''
+      treeNodes.value = data.nodes || []
+    }
+  } catch {
+    // locked 已由 vaultFetch 统一处理
+  } finally {
+    treeLoading.value = false
+  }
+}
+
+// 按顶层目录分组展示；受保护目录（未加入索引）单独一行
+const treeView = computed(() => {
+  const groups = new Map()
+  for (const n of treeNodes.value) {
+    const segs = n.path.split('/')
+    const top = segs.length > 1 ? segs[0] : '（根目录）'
+    if (!groups.has(top)) groups.set(top, { top, protectedNode: null, files: [] })
+    const g = groups.get(top)
+    if (n.status === 'protected') g.protectedNode = n
+    else g.files.push(n)
+  }
+  return [...groups.values()].sort((a, b) => a.top.localeCompare(b.top))
+})
+
+function relPath(p) {
+  const segs = p.split('/')
+  return segs.length > 1 ? segs.slice(1).join('/') : p
+}
+
+async function protectAdd(node) {
+  ragError.value = ''
+  try {
+    const res = await vaultFetch('/api/vault/protect/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: node.path.replace(/\/+$/, '') })
+    })
+    if (res.ok) {
+      applyIndexInfo(await res.json())
+      const top = node.path.replace(/\/+$/, '')
+      if (!protectAdded.value.includes(top)) protectAdded.value.push(top)
+      saveProtectAdded()
+      await loadTree()
+    } else {
+      ragError.value = (await res.text()) || '操作失败'
+    }
+  } catch (e) {
+    if (e.message !== 'locked') ragError.value = '⚠️ 操作失败'
+  }
+}
+
+async function protectRemove(top) {
+  ragError.value = ''
+  try {
+    const res = await vaultFetch('/api/vault/protect/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: top })
+    })
+    if (res.ok) {
+      applyIndexInfo(await res.json())
+      protectAdded.value = protectAdded.value.filter((p) => p !== top)
+      saveProtectAdded()
+      await loadTree()
+    } else {
+      if (res.status === 400) {
+        // 后端说不是保护目录 → 本地记忆过期，清理
+        protectAdded.value = protectAdded.value.filter((p) => p !== top)
+        saveProtectAdded()
+        await loadTree()
+      }
+      ragError.value = (await res.text()) || '操作失败'
+    }
+  } catch (e) {
+    if (e.message !== 'locked') ragError.value = '⚠️ 操作失败'
+  }
+}
+
+async function createNote() {
+  const path = notePath.value.trim()
+  const content = noteContent.value
+  if (!path || !content.trim() || treeLoading.value) return
+  ragError.value = ''
+  try {
+    const res = await vaultFetch('/api/vault/note', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      applyIndexInfo(data)
+      notePath.value = ''
+      noteContent.value = ''
+      newNoteOpen.value = false
+      await loadTree()
+    } else {
+      ragError.value = (await res.text()) || '创建失败'
+    }
+  } catch (e) {
+    if (e.message !== 'locked') ragError.value = '⚠️ 创建失败'
   }
 }
 
@@ -452,7 +698,7 @@ onMounted(async () => {
       </div>
       <div class="sidebar-foot">
         <button class="rag-entry" @click="openRagCard">
-          <span aria-hidden="true">🗂️</span>RAG 知识库设置
+          <span aria-hidden="true">🗂️</span>知识库管理
         </button>
       </div>
     </aside>
@@ -490,6 +736,20 @@ onMounted(async () => {
                   <span v-else-if="msg.provider === 'glm4flash'" class="model-tag g4" title="由智谱 GLM-4-Flash 生成（免费备选）">GLM-4</span>
                   <span v-if="msg.ragUsed" class="rag-tag" title="本次回答基于本地笔记">📄 RAG</span>
                   <span v-if="msg.fallback" class="model-tag fb" title="DeepSeek 不可用或未授权，已自动使用免费模型">回落免费</span>
+
+                  <!-- AI 写入笔记确认卡片 -->
+                  <template v-if="msg.pendingNotes">
+                    <div v-for="n in msg.pendingNotes" :key="n.id" class="note-card">
+                      <div class="note-card-head">📝 AI 请求写入笔记</div>
+                      <div class="note-card-path" :title="n.path">{{ n.path }}</div>
+                      <pre class="note-card-preview">{{ n.content }}</pre>
+                      <div v-if="!n._done" class="note-card-actions">
+                        <button class="btn primary" :disabled="n._busy" @click="confirmNote(n)">确认写入</button>
+                        <button class="btn" :disabled="n._busy" @click="rejectNote(n)">拒绝</button>
+                      </div>
+                      <div v-else class="note-card-done">{{ n._done }}</div>
+                    </div>
+                  </template>
                 </template>
               </div>
             </div>
@@ -563,7 +823,7 @@ onMounted(async () => {
         </footer>
       </template>
 
-      <!-- 欢迎页：居中 logo + 模型胶囊 + 输入舱 -->
+      <!-- 欢迎页：居中 logo + 输入舱 -->
       <template v-else>
         <div class="stage">
           <div class="stage-top">
@@ -652,74 +912,154 @@ onMounted(async () => {
       </template>
     </main>
 
-    <!-- RAG 知识库设置卡片 -->
+    <!-- 知识库管理弹窗（密钥门禁） -->
     <div v-if="ragCardOpen" class="modal-backdrop" @click.self="ragCardOpen = false">
       <div class="rag-card">
         <header class="rag-head">
-          <h2>🗂️ RAG 知识库设置</h2>
+          <h2>🗂️ 知识库管理</h2>
           <button class="modal-close" title="关闭" @click="ragCardOpen = false">✕</button>
         </header>
 
-        <div class="rag-status">
-          <template v-if="ragStatus">
-            <span class="rag-enabled" :class="ragStatus.enabled ? 'on' : 'off'">
-              {{ ragStatus.enabled ? '✅ 检索已启用' : '⛔ 检索已停用' }}
-            </span>
-            <span class="rag-nums">{{ ragStatus.files ?? '–' }} 文件 · {{ ragStatus.chunks ?? '–' }} 块</span>
-            <span class="rag-vault" :title="ragStatus.vaultPath">📚 {{ ragStatus.vaultPath }}</span>
-          </template>
-          <span v-else class="rag-nums">{{ ragLoading ? '加载中…' : '状态不可用' }}</span>
-        </div>
-        <p v-if="ragStatus && ragStatus.lastError" class="rag-error">索引异常：{{ ragStatus.lastError }}</p>
-
-        <section class="rag-section">
-          <h3>基线规则（不可移除）</h3>
-          <div class="chip-row">
-            <span v-for="b in ragBase" :key="b" class="chip">{{ b }}</span>
-            <span v-if="!ragBase.length && !ragLoading" class="rag-nums">无</span>
-          </div>
-        </section>
-
-        <section class="rag-section">
-          <h3>自定义规则（变更立即生效并重建索引）</h3>
-          <ul class="rule-list">
-            <li v-for="r in ragRules" :key="r.id" class="rule-row" :class="{ off: !r.enabled }">
-              <div class="rule-main">
-                <div class="rule-pattern" :title="r.pattern">{{ r.pattern }}</div>
-                <div class="rule-meta" :title="r.remark || ''">
-                  {{ r.remark || '无备注' }}<template v-if="r.updatedAt"> · {{ formatDate(r.updatedAt) }}</template>
-                </div>
-              </div>
-              <template v-if="pendingDeleteId === r.id">
-                <span class="rule-confirm">确认删除？</span>
-                <button class="mini-btn danger" @click="deletePattern(r)">删除</button>
-                <button class="mini-btn" @click="pendingDeleteId = null">取消</button>
-              </template>
-              <template v-else>
-                <label class="mini-switch" title="启用 / 停用该规则">
-                  <input type="checkbox" :checked="r.enabled" @change="togglePattern(r)" />
-                  <span class="mini-slider"></span>
-                </label>
-                <button class="rule-del" title="删除规则" @click="pendingDeleteId = r.id">✕</button>
-              </template>
-            </li>
-            <li v-if="!ragRules.length && !ragLoading" class="rule-empty">暂无自定义规则</li>
-          </ul>
-
-          <div class="rule-add">
+        <!-- 锁屏 -->
+        <div v-if="vaultLocked" class="vault-lock">
+          <div class="vault-lock-ico" aria-hidden="true">🔐</div>
+          <p class="vault-lock-tip">知识库管理已加密<br />输入密钥后可查看文件树、管理规则与索引</p>
+          <div class="vault-lock-form">
             <input
-              v-model="newPattern"
-              class="rule-input"
-              placeholder="路径包含匹配，如：私人目录 / 40-Diary"
-              @keydown.enter="addPattern"
+              v-model="vaultKey"
+              type="password"
+              class="vault-key-input"
+              placeholder="输入密钥"
+              @keydown.enter="unlockVault"
             />
-            <input v-model="newRemark" class="rule-input remark" placeholder="备注（可选）" @keydown.enter="addPattern" />
-            <button class="btn primary" :disabled="!newPattern.trim() || ragLoading" @click="addPattern">＋ 添加</button>
+            <button class="btn primary" :disabled="!vaultKey || keySubmitting" @click="unlockVault">
+              {{ keySubmitting ? '…' : '解锁' }}
+            </button>
           </div>
-          <p v-if="ragError" class="rag-error">{{ ragError }}</p>
-        </section>
+          <p v-if="keyError" class="rag-error">{{ keyError }}</p>
+        </div>
 
-        <p class="rag-note">提示：排除只作用于检索层，历史消息与已有对话记忆不受影响。</p>
+        <template v-else>
+          <div class="rag-status">
+            <template v-if="ragStatus">
+              <span class="rag-enabled" :class="ragStatus.enabled ? 'on' : 'off'">
+                {{ ragStatus.enabled ? '✅ 检索已启用' : '⛔ 检索已停用' }}
+              </span>
+              <span class="rag-nums">{{ ragStatus.files ?? '–' }} 文件 · {{ ragStatus.chunks ?? '–' }} 块</span>
+              <span class="rag-vault" :title="ragStatus.vaultPath">📚 {{ ragStatus.vaultPath }}</span>
+            </template>
+            <span v-else class="rag-nums">{{ ragLoading ? '加载中…' : '状态不可用' }}</span>
+          </div>
+          <p v-if="ragStatus && ragStatus.lastError" class="rag-error">索引异常：{{ ragStatus.lastError }}</p>
+
+          <div class="rag-tabs">
+            <button type="button" class="rag-tab" :class="{ on: vaultTab === 'files' }" @click="vaultTab = 'files'">📁 文件</button>
+            <button type="button" class="rag-tab" :class="{ on: vaultTab === 'rules' }" @click="vaultTab = 'rules'">📐 规则</button>
+          </div>
+
+          <!-- 文件页签：文件树 + 保护目录 + 新建笔记 -->
+          <section v-show="vaultTab === 'files'" class="rag-section">
+            <div class="tree-toolbar">
+              <button class="btn" @click="newNoteOpen = !newNoteOpen">＋ 新建笔记</button>
+              <button class="btn" :disabled="treeLoading" @click="loadTree">刷新</button>
+            </div>
+
+            <div v-if="newNoteOpen" class="note-form">
+              <input
+                v-model="notePath"
+                class="rule-input"
+                placeholder="路径，如：10-Daily/2026-09-07.md"
+              />
+              <textarea
+                v-model="noteContent"
+                class="note-content-input"
+                rows="5"
+                placeholder="Markdown 内容…"
+              ></textarea>
+              <div class="note-form-actions">
+                <button class="btn" @click="newNoteOpen = false">取消</button>
+                <button class="btn primary" :disabled="!notePath.trim() || !noteContent.trim() || treeLoading" @click="createNote">创建</button>
+              </div>
+            </div>
+
+            <div class="tree-groups">
+              <div v-for="g in treeView" :key="g.top" class="tree-group">
+                <div class="tree-group-head">
+                  <span class="tree-dir">📂 {{ g.top }}</span>
+                  <span class="tree-actions">
+                    <button
+                      v-if="protectAdded.includes(g.top)"
+                      class="mini-btn warn"
+                      title="将该目录移出检索索引"
+                      @click="protectRemove(g.top)"
+                    >移出索引</button>
+                    <span class="tree-count">{{ g.files.length }} 文件</span>
+                  </span>
+                </div>
+                <div v-if="g.protectedNode" class="tree-protected">
+                  <span>🔒 受保护 · {{ g.protectedNode.fileCount }} 个文件未索引</span>
+                  <button class="mini-btn" @click="protectAdd(g.protectedNode)">加入索引</button>
+                </div>
+                <ul v-if="g.files.length" class="tree-files">
+                  <li v-for="n in g.files" :key="n.path" class="tree-file" :class="n.status">
+                    <span class="tree-dot" aria-hidden="true"></span>
+                    <span class="tree-path" :title="n.path">{{ relPath(n.path) }}</span>
+                    <span v-if="n.status === 'excluded'" class="tree-rule" :title="'来源规则：' + (n.rule || '')">已排除</span>
+                  </li>
+                </ul>
+              </div>
+              <p v-if="!treeNodes.length && !treeLoading" class="rule-empty">库中暂无文件</p>
+            </div>
+          </section>
+
+          <!-- 规则页签：基线 + 自定义规则 -->
+          <section v-show="vaultTab === 'rules'" class="rag-section">
+            <h3>基线规则（不可移除）</h3>
+            <div class="chip-row">
+              <span v-for="b in ragBase" :key="b" class="chip">{{ b }}</span>
+              <span v-if="!ragBase.length && !ragLoading" class="rag-nums">无</span>
+            </div>
+
+            <h3 class="rules-title">自定义规则（变更立即生效并重建索引）</h3>
+            <ul class="rule-list">
+              <li v-for="r in ragRules" :key="r.id" class="rule-row" :class="{ off: !r.enabled }">
+                <div class="rule-main">
+                  <div class="rule-pattern" :title="r.pattern">{{ r.pattern }}</div>
+                  <div class="rule-meta" :title="r.remark || ''">
+                    {{ r.remark || '无备注' }}<template v-if="r.updatedAt"> · {{ formatDate(r.updatedAt) }}</template>
+                  </div>
+                </div>
+                <template v-if="pendingDeleteId === r.id">
+                  <span class="rule-confirm">确认删除？</span>
+                  <button class="mini-btn danger" @click="deletePattern(r)">删除</button>
+                  <button class="mini-btn" @click="pendingDeleteId = null">取消</button>
+                </template>
+                <template v-else>
+                  <label class="mini-switch" title="启用 / 停用该规则">
+                    <input type="checkbox" :checked="r.enabled" @change="togglePattern(r)" />
+                    <span class="mini-slider"></span>
+                  </label>
+                  <button class="rule-del" title="删除规则" @click="pendingDeleteId = r.id">✕</button>
+                </template>
+              </li>
+              <li v-if="!ragRules.length && !ragLoading" class="rule-empty">暂无自定义规则</li>
+            </ul>
+
+            <div class="rule-add">
+              <input
+                v-model="newPattern"
+                class="rule-input"
+                placeholder="路径包含匹配，如：私人目录 / 40-Diary"
+                @keydown.enter="addPattern"
+              />
+              <input v-model="newRemark" class="rule-input remark" placeholder="备注（可选）" @keydown.enter="addPattern" />
+              <button class="btn primary" :disabled="!newPattern.trim() || ragLoading" @click="addPattern">＋ 添加</button>
+            </div>
+          </section>
+
+          <p v-if="ragError" class="rag-error">{{ ragError }}</p>
+          <p class="rag-note">提示：排除/锁定只作用于检索层，历史消息与已有对话记忆不受影响。</p>
+        </template>
       </div>
     </div>
   </div>

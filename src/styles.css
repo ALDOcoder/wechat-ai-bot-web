@@ -805,6 +805,277 @@ body {
   cursor: not-allowed;
 }
 
+/* ---------- 门禁锁屏 ---------- */
+.vault-lock {
+  padding: 30px 16px 20px;
+  text-align: center;
+}
+
+.vault-lock-ico {
+  font-size: 34px;
+  margin-bottom: 10px;
+}
+
+.vault-lock-tip {
+  font-size: 13px;
+  color: var(--text-3);
+  line-height: 1.8;
+  margin-bottom: 16px;
+}
+
+.vault-lock-form {
+  display: flex;
+  gap: 8px;
+  max-width: 340px;
+  margin: 0 auto;
+}
+
+.vault-key-input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  color: var(--text-1);
+  transition: border-color 0.15s;
+}
+
+.vault-key-input:focus {
+  border-color: var(--accent);
+}
+
+/* ---------- 管理面页签 ---------- */
+.rag-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.rag-tab {
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  background: #fff;
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.rag-tab.on {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.rules-title {
+  margin-top: 14px;
+}
+
+/* ---------- 文件树 ---------- */
+.tree-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.tree-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 330px;
+  overflow-y: auto;
+}
+
+.tree-group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.tree-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-side);
+}
+
+.tree-dir {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tree-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tree-count {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.tree-protected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  background: rgba(245, 158, 11, 0.07);
+  font-size: 12.5px;
+  color: #b45309;
+}
+
+.tree-files {
+  list-style: none;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.tree-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+.tree-file + .tree-file {
+  border-top: 1px dashed var(--line);
+}
+
+.tree-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #16a34a;
+  flex-shrink: 0;
+}
+
+.tree-file.excluded .tree-dot {
+  background: #cbd5e1;
+}
+
+.tree-file.excluded .tree-path {
+  color: var(--text-3);
+}
+
+.tree-path {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-rule {
+  font-size: 11px;
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+.mini-btn.warn {
+  border-color: rgba(220, 38, 38, 0.35);
+  color: #dc2626;
+}
+
+.mini-btn.warn:hover {
+  background: rgba(220, 38, 38, 0.06);
+}
+
+/* 新建笔记表单 */
+.note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  margin-bottom: 10px;
+  background: var(--bg-side);
+}
+
+.note-content-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 90px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  outline: none;
+  color: var(--text-1);
+}
+
+.note-content-input:focus {
+  border-color: var(--accent);
+}
+
+.note-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---------- AI 写入确认卡片（聊天流） ---------- */
+.note-card {
+  display: block;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.note-card-head {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.note-card-path {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  margin-bottom: 6px;
+  word-break: break-all;
+}
+
+.note-card-preview {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  background: var(--bg-side);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  max-height: 130px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.note-card-done {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
 /* ---------- 动画 ---------- */
 @keyframes msg-in {
   from {
@@ -1322,6 +1593,15 @@ body {
 
   .rule-add .btn {
     margin-left: auto;
+  }
+
+  /* 知识库管理 */
+  .vault-lock-form {
+    flex-direction: column;
+  }
+
+  .tree-files {
+    max-height: 160px;
   }
 }
 
