@@ -280,6 +280,125 @@ function scrollToBottom() {
   })
 }
 
+// ---------- RAG 知识库设置卡片 ----------
+const ragCardOpen = ref(false)
+const ragLoading = ref(false)
+const ragStatus = ref(null) // { enabled, vaultPath, files, chunks, lastError }
+const ragBase = ref([])
+const ragRules = ref([])
+const newPattern = ref('')
+const newRemark = ref('')
+const ragError = ref('')
+const pendingDeleteId = ref(null)
+
+// 增删改的响应里自带重建后的 files/chunks，直接刷新状态区，不必再调 refresh
+function applyIndexInfo(data) {
+  if (!ragStatus.value) ragStatus.value = {}
+  if (typeof data.files === 'number') ragStatus.value.files = data.files
+  if (typeof data.chunks === 'number') ragStatus.value.chunks = data.chunks
+  if (typeof data.lastError === 'string') ragStatus.value.lastError = data.lastError
+}
+
+async function openRagCard() {
+  ragCardOpen.value = true
+  sidebarOpen.value = false
+  ragError.value = ''
+  await loadRagCard()
+}
+
+async function loadRagCard() {
+  ragLoading.value = true
+  try {
+    const [statusRes, patternsRes] = await Promise.all([
+      fetch('/api/rag/status'),
+      fetch('/api/rag/patterns')
+    ])
+    if (statusRes.ok) ragStatus.value = await statusRes.json()
+    if (patternsRes.ok) {
+      const data = await patternsRes.json()
+      ragBase.value = data.basePatterns || []
+      ragRules.value = data.patterns || []
+    }
+  } catch {
+    ragError.value = '⚠️ 无法连接后端服务，请确认 Java 服务（8080）已启动。'
+  } finally {
+    ragLoading.value = false
+  }
+}
+
+async function addPattern() {
+  const pattern = newPattern.value.trim()
+  if (!pattern || ragLoading.value) return
+  ragError.value = ''
+  try {
+    const res = await fetch('/api/rag/patterns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pattern, remark: newRemark.value.trim() })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      ragRules.value.push(data.row)
+      applyIndexInfo(data)
+      newPattern.value = ''
+      newRemark.value = ''
+    } else {
+      // 400 的响应体是纯文本提示，直接展示
+      ragError.value = (await res.text()) || '添加失败'
+    }
+  } catch {
+    ragError.value = '⚠️ 无法连接后端服务'
+  }
+}
+
+async function togglePattern(row) {
+  ragError.value = ''
+  try {
+    const res = await fetch('/api/rag/patterns/' + row.id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: !row.enabled })
+    })
+    if (res.ok) {
+      const data = await res.json()
+      const idx = ragRules.value.findIndex((r) => r.id === row.id)
+      if (idx !== -1) ragRules.value[idx] = data.row
+      applyIndexInfo(data)
+    } else if (res.status === 404) {
+      await loadRagCard() // 规则已被别处删除，刷新列表
+    } else {
+      ragError.value = (await res.text()) || '操作失败'
+    }
+  } catch {
+    ragError.value = '⚠️ 无法连接后端服务'
+  }
+}
+
+async function deletePattern(row) {
+  ragError.value = ''
+  try {
+    const res = await fetch('/api/rag/patterns/' + row.id, { method: 'DELETE' })
+    if (res.ok) {
+      const data = await res.json()
+      ragRules.value = ragRules.value.filter((r) => r.id !== row.id)
+      applyIndexInfo(data)
+    } else if (res.status === 404) {
+      ragRules.value = ragRules.value.filter((r) => r.id !== row.id)
+    } else {
+      ragError.value = (await res.text()) || '删除失败'
+    }
+  } catch {
+    ragError.value = '⚠️ 无法连接后端服务'
+  } finally {
+    pendingDeleteId.value = null
+  }
+}
+
+function formatDate(iso) {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleString()
+}
+
 onMounted(async () => {
   await checkHealth()
   await loadSessions()
@@ -330,6 +449,11 @@ onMounted(async () => {
         </div>
 
         <p v-if="sessions.length === 0" class="empty-side">暂无会话，点「开启新对话」开始</p>
+      </div>
+      <div class="sidebar-foot">
+        <button class="rag-entry" @click="openRagCard">
+          <span aria-hidden="true">🗂️</span>RAG 知识库设置
+        </button>
       </div>
     </aside>
 
@@ -527,5 +651,76 @@ onMounted(async () => {
         </div>
       </template>
     </main>
+
+    <!-- RAG 知识库设置卡片 -->
+    <div v-if="ragCardOpen" class="modal-backdrop" @click.self="ragCardOpen = false">
+      <div class="rag-card">
+        <header class="rag-head">
+          <h2>🗂️ RAG 知识库设置</h2>
+          <button class="modal-close" title="关闭" @click="ragCardOpen = false">✕</button>
+        </header>
+
+        <div class="rag-status">
+          <template v-if="ragStatus">
+            <span class="rag-enabled" :class="ragStatus.enabled ? 'on' : 'off'">
+              {{ ragStatus.enabled ? '✅ 检索已启用' : '⛔ 检索已停用' }}
+            </span>
+            <span class="rag-nums">{{ ragStatus.files ?? '–' }} 文件 · {{ ragStatus.chunks ?? '–' }} 块</span>
+            <span class="rag-vault" :title="ragStatus.vaultPath">📚 {{ ragStatus.vaultPath }}</span>
+          </template>
+          <span v-else class="rag-nums">{{ ragLoading ? '加载中…' : '状态不可用' }}</span>
+        </div>
+        <p v-if="ragStatus && ragStatus.lastError" class="rag-error">索引异常：{{ ragStatus.lastError }}</p>
+
+        <section class="rag-section">
+          <h3>基线规则（不可移除）</h3>
+          <div class="chip-row">
+            <span v-for="b in ragBase" :key="b" class="chip">{{ b }}</span>
+            <span v-if="!ragBase.length && !ragLoading" class="rag-nums">无</span>
+          </div>
+        </section>
+
+        <section class="rag-section">
+          <h3>自定义规则（变更立即生效并重建索引）</h3>
+          <ul class="rule-list">
+            <li v-for="r in ragRules" :key="r.id" class="rule-row" :class="{ off: !r.enabled }">
+              <div class="rule-main">
+                <div class="rule-pattern" :title="r.pattern">{{ r.pattern }}</div>
+                <div class="rule-meta" :title="r.remark || ''">
+                  {{ r.remark || '无备注' }}<template v-if="r.updatedAt"> · {{ formatDate(r.updatedAt) }}</template>
+                </div>
+              </div>
+              <template v-if="pendingDeleteId === r.id">
+                <span class="rule-confirm">确认删除？</span>
+                <button class="mini-btn danger" @click="deletePattern(r)">删除</button>
+                <button class="mini-btn" @click="pendingDeleteId = null">取消</button>
+              </template>
+              <template v-else>
+                <label class="mini-switch" title="启用 / 停用该规则">
+                  <input type="checkbox" :checked="r.enabled" @change="togglePattern(r)" />
+                  <span class="mini-slider"></span>
+                </label>
+                <button class="rule-del" title="删除规则" @click="pendingDeleteId = r.id">✕</button>
+              </template>
+            </li>
+            <li v-if="!ragRules.length && !ragLoading" class="rule-empty">暂无自定义规则</li>
+          </ul>
+
+          <div class="rule-add">
+            <input
+              v-model="newPattern"
+              class="rule-input"
+              placeholder="路径包含匹配，如：私人目录 / 40-Diary"
+              @keydown.enter="addPattern"
+            />
+            <input v-model="newRemark" class="rule-input remark" placeholder="备注（可选）" @keydown.enter="addPattern" />
+            <button class="btn primary" :disabled="!newPattern.trim() || ragLoading" @click="addPattern">＋ 添加</button>
+          </div>
+          <p v-if="ragError" class="rag-error">{{ ragError }}</p>
+        </section>
+
+        <p class="rag-note">提示：排除只作用于检索层，历史消息与已有对话记忆不受影响。</p>
+      </div>
+    </div>
   </div>
 </template>

@@ -350,6 +350,18 @@ body {
   cursor: not-allowed;
 }
 
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-deep);
+  border-color: var(--accent-deep);
+  color: #fff;
+}
+
 /* 服务状态灯 */
 .status {
   display: inline-flex;
@@ -841,6 +853,335 @@ body {
   }
 }
 
+/* ---------- 侧栏底部：RAG 设置入口 ---------- */
+.sidebar-foot {
+  border-top: 1px solid var(--line);
+  padding: 10px 14px 12px;
+}
+
+.rag-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  background: #fff;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+
+.rag-entry:hover {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+/* ---------- RAG 知识库设置卡片 ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(20, 24, 44, 0.45);
+}
+
+.rag-card {
+  width: 100%;
+  max-width: 560px;
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 18px 20px 14px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 24px 64px -16px rgba(16, 24, 40, 0.35);
+  animation: msg-in 0.25s var(--ease) both;
+}
+
+.rag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.rag-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(100, 116, 139, 0.1);
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.modal-close:hover {
+  background: rgba(100, 116, 139, 0.2);
+}
+
+.rag-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  background: var(--bg-side);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 12.5px;
+}
+
+.rag-enabled.on {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.rag-enabled.off {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.rag-nums {
+  color: var(--text-2);
+}
+
+.rag-vault {
+  color: var(--text-3);
+  font-size: 11.5px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rag-section {
+  margin-top: 14px;
+}
+
+.rag-section h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  background: var(--hover);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.rule-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.rule-row.off .rule-pattern {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+
+.rule-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.rule-pattern {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rule-meta {
+  font-size: 11.5px;
+  color: var(--text-3);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rule-del {
+  border: none;
+  background: transparent;
+  color: #b0b5bd;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+
+.rule-del:hover {
+  background: rgba(220, 38, 38, 0.1);
+  color: #dc2626;
+}
+
+.rule-confirm {
+  font-size: 12px;
+  color: #dc2626;
+  flex-shrink: 0;
+}
+
+.mini-btn {
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-full);
+  background: #fff;
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.mini-btn:hover:not(.danger) {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.mini-btn.danger {
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #fff;
+}
+
+.mini-btn.danger:hover {
+  background: #b91c1c;
+}
+
+/* 规则行迷你开关 */
+.mini-switch {
+  position: relative;
+  display: inline-block;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.mini-switch input {
+  position: absolute;
+  opacity: 0;
+}
+
+.mini-slider {
+  display: block;
+  width: 32px;
+  height: 19px;
+  background: #d4d8e6;
+  border-radius: var(--r-full);
+  transition: background 0.2s;
+}
+
+.mini-slider::before {
+  content: "";
+  position: absolute;
+  top: 2.5px;
+  left: 2.5px;
+  width: 14px;
+  height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(30, 34, 53, 0.25);
+  transition: transform 0.2s var(--ease);
+}
+
+.mini-switch input:checked + .mini-slider {
+  background: var(--accent);
+}
+
+.mini-switch input:checked + .mini-slider::before {
+  transform: translateX(13px);
+}
+
+.rule-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rule-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-1);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.rule-input:focus {
+  border-color: var(--accent);
+}
+
+.rule-input.remark {
+  flex: 0.7;
+}
+
+.rule-empty {
+  padding: 10px 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.rag-error {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: #dc2626;
+}
+
+.rag-note {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.6;
+}
+
 /* ---------- 移动端适配 ---------- */
 @media (max-width: 768px) {
   .hamburger,
@@ -961,9 +1302,26 @@ body {
     font-size: 20px;
   }
 
-  .model-pill {
-    padding: 8px 16px;
-    font-size: 13px;
+  /* RAG 设置卡片 */
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .rag-card {
+    padding: 16px 14px 12px;
+  }
+
+  .rule-add {
+    flex-wrap: wrap;
+  }
+
+  .rule-input.remark {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .rule-add .btn {
+    margin-left: auto;
   }
 }
 
