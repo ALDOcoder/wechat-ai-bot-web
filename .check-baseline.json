@@ -1,0 +1,30 @@
+{
+  "sizes": {
+    "src/App.vue": 1091,
+    "src/main.js": 5,
+    "src/styles.css": 1650,
+    "src/treeGroups.js": 74
+  },
+  "apiUsage": {
+    "src/App.vue": {
+      "fetches": 14,
+      "literals": 21
+    }
+  },
+  "hexOutsideRoot": {
+    "src/styles.css": 46
+  },
+  "dupRuns": [
+    {
+      "hash": "1ea6a1d9",
+      "where": "src/App.vue:764",
+      "length": 63,
+      "starts": 2
+    }
+  ],
+  "storageKeys": [
+    "vaultProtectAdded",
+    "vaultToken"
+  ],
+  "docDrift": []
+}

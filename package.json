@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check": "node scripts/check.mjs",
+    "check:report": "node scripts/check.mjs --report",
+    "check:bump": "node scripts/check.mjs --bump"
   },
   "dependencies": {
     "vue": "^3.5.13"
