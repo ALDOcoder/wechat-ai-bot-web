@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, nextTick, computed } from 'vue'
+import { buildTreeGroups, isUnindexed, stripSlash, isSamePrefix } from './treeGroups.js'
 
 const ragEnabled = ref(true)
 const sending = ref(false)
@@ -232,7 +233,9 @@ async function send() {
       content: data.reply || '（无回复内容）',
       provider: data.provider || '',
       ragUsed: !!data.ragUsed,
-      fallback: model.value === 'deepseek' && data.provider !== 'deepseek',
+      // 后端限流时会自动换档一次（zhipu↔glm4flash、deepseek→zhipu），以响应 provider 为准
+      fallback: !!data.provider && model.value !== data.provider,
+      attempted: currentModel.value.label,
       // AI 请求写入笔记的草稿（两阶段写入），渲染为确认卡片
       pendingNotes: (Array.isArray(data.pendingNotes) && data.pendingNotes.length)
         ? data.pendingNotes
@@ -266,6 +269,7 @@ async function confirmNote(note) {
       const data = JSON.parse(text)
       applyIndexInfo(data)
       note._done = '✅ 已写入 ' + data.path
+      note._hint = indexHint(data)
     } else {
       note._done = '⚠️ ' + (text || '操作失败')
     }
@@ -379,6 +383,13 @@ function applyIndexInfo(data) {
   if (typeof data.files === 'number') ragStatus.value.files = data.files
   if (typeof data.chunks === 'number') ragStatus.value.chunks = data.chunks
   if (typeof data.lastError === 'string') ragStatus.value.lastError = data.lastError
+}
+
+// 落盘成功 ≠ 进索引：写进未解锁保护目录时后端返回 indexed:false，不提示会被当成「存好了却问不到」
+function indexHint(data) {
+  return data && data.indexed === false
+    ? '⚠️ 已落盘，但该目录未加入索引：只有你在管理面看得见，AI 检索不到。要能问出来，去「知识库管理 → 文件」给该目录点「加入索引」。'
+    : ''
 }
 
 async function openRagCard() {
@@ -529,6 +540,7 @@ const treeNodes = ref([])
 const newNoteOpen = ref(false)
 const notePath = ref('')
 const noteContent = ref('')
+const noteResult = ref('')
 
 async function loadTree() {
   treeLoading.value = true
@@ -546,37 +558,24 @@ async function loadTree() {
   }
 }
 
-// 按顶层目录分组展示；受保护目录（未加入索引）单独一行
-const treeView = computed(() => {
-  const groups = new Map()
-  for (const n of treeNodes.value) {
-    const segs = n.path.split('/')
-    const top = segs.length > 1 ? segs[0] : '（根目录）'
-    if (!groups.has(top)) groups.set(top, { top, protectedNode: null, files: [] })
-    const g = groups.get(top)
-    if (n.status === 'protected') g.protectedNode = n
-    else g.files.push(n)
-  }
-  return [...groups.values()].sort((a, b) => a.top.localeCompare(b.top))
-})
+// 分组与路径剥离算法在 src/treeGroups.js（纯函数，可脱离组件验证）
+const treeView = computed(() => buildTreeGroups(treeNodes.value, protectAdded.value))
 
-function relPath(p) {
-  const segs = p.split('/')
-  return segs.length > 1 ? segs.slice(1).join('/') : p
-}
+// 加入索引 = 把这些笔记开放给会话检索，方向不可逆，必须二次确认
+const pendingProtect = ref(null)
 
 async function protectAdd(node) {
   ragError.value = ''
+  const pre = stripSlash(node.path)
   try {
     const res = await vaultFetch('/api/vault/protect/add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: node.path.replace(/\/+$/, '') })
+      body: JSON.stringify({ path: pre })
     })
     if (res.ok) {
       applyIndexInfo(await res.json())
-      const top = node.path.replace(/\/+$/, '')
-      if (!protectAdded.value.includes(top)) protectAdded.value.push(top)
+      if (!protectAdded.value.some((p) => isSamePrefix(p, pre))) protectAdded.value.push(pre)
       saveProtectAdded()
       await loadTree()
     } else {
@@ -584,26 +583,29 @@ async function protectAdd(node) {
     }
   } catch (e) {
     if (e.message !== 'locked') ragError.value = '⚠️ 操作失败'
+  } finally {
+    pendingProtect.value = null
   }
 }
 
-async function protectRemove(top) {
+async function protectRemove(g) {
   ragError.value = ''
+  const pre = g.prefix
   try {
     const res = await vaultFetch('/api/vault/protect/remove', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: top })
+      body: JSON.stringify({ path: pre })
     })
     if (res.ok) {
       applyIndexInfo(await res.json())
-      protectAdded.value = protectAdded.value.filter((p) => p !== top)
+      protectAdded.value = protectAdded.value.filter((p) => !isSamePrefix(p, pre))
       saveProtectAdded()
       await loadTree()
     } else {
       if (res.status === 400) {
         // 后端说不是保护目录 → 本地记忆过期，清理
-        protectAdded.value = protectAdded.value.filter((p) => p !== top)
+        protectAdded.value = protectAdded.value.filter((p) => !isSamePrefix(p, pre))
         saveProtectAdded()
         await loadTree()
       }
@@ -630,7 +632,8 @@ async function createNote() {
       applyIndexInfo(data)
       notePath.value = ''
       noteContent.value = ''
-      newNoteOpen.value = false
+      const hint = indexHint(data)
+      noteResult.value = '✅ 已创建 ' + data.path + (hint ? '\n' + hint : '')
       await loadTree()
     } else {
       ragError.value = (await res.text()) || '创建失败'
@@ -735,7 +738,7 @@ onMounted(async () => {
                   <span v-else-if="msg.provider === 'zhipu'" class="model-tag zp" title="由智谱 GLM-4.7-Flash 生成（免费）">GLM-4.7</span>
                   <span v-else-if="msg.provider === 'glm4flash'" class="model-tag g4" title="由智谱 GLM-4-Flash 生成（免费备选）">GLM-4</span>
                   <span v-if="msg.ragUsed" class="rag-tag" title="本次回答基于本地笔记">📄 RAG</span>
-                  <span v-if="msg.fallback" class="model-tag fb" title="DeepSeek 不可用或未授权，已自动使用免费模型">回落免费</span>
+                  <span v-if="msg.fallback" class="model-tag fb" :title="'你选的是 ' + msg.attempted + '，该档不可用或被限流，后端已自动换档'">已自动切换</span>
 
                   <!-- AI 写入笔记确认卡片 -->
                   <template v-if="msg.pendingNotes">
@@ -748,6 +751,7 @@ onMounted(async () => {
                         <button class="btn" :disabled="n._busy" @click="rejectNote(n)">拒绝</button>
                       </div>
                       <div v-else class="note-card-done">{{ n._done }}</div>
+                      <div v-if="n._hint" class="note-card-hint">{{ n._hint }}</div>
                     </div>
                   </template>
                 </template>
@@ -977,34 +981,55 @@ onMounted(async () => {
                 placeholder="Markdown 内容…"
               ></textarea>
               <div class="note-form-actions">
-                <button class="btn" @click="newNoteOpen = false">取消</button>
+                <button class="btn" @click="newNoteOpen = false; noteResult = ''">取消</button>
                 <button class="btn primary" :disabled="!notePath.trim() || !noteContent.trim() || treeLoading" @click="createNote">创建</button>
               </div>
+              <p v-if="noteResult" class="note-result">{{ noteResult }}</p>
             </div>
 
             <div class="tree-groups">
-              <div v-for="g in treeView" :key="g.top" class="tree-group">
+              <div v-for="g in treeView" :key="g.key" class="tree-group">
                 <div class="tree-group-head">
-                  <span class="tree-dir">📂 {{ g.top }}</span>
+                  <span class="tree-dir" :title="g.prefix || g.key">
+                    {{ g.protectedNode ? '🔒' : g.prefix ? '📁' : '📂' }} {{ g.label }}
+                  </span>
                   <span class="tree-actions">
                     <button
-                      v-if="protectAdded.includes(g.top)"
+                      v-if="g.prefix && protectAdded.some((p) => isSamePrefix(p, g.prefix))"
                       class="mini-btn warn"
                       title="将该目录移出检索索引"
-                      @click="protectRemove(g.top)"
+                      @click="protectRemove(g)"
                     >移出索引</button>
-                    <span class="tree-count">{{ g.files.length }} 文件</span>
+                    <span class="tree-count">{{ g.indexed }} 可检索 · {{ g.excluded }} 未检索</span>
                   </span>
                 </div>
+
+                <!-- 保护目录：文件已逐条可见，这里只是索引开关（语义是「搜不到」而非「看不见」） -->
                 <div v-if="g.protectedNode" class="tree-protected">
-                  <span>🔒 受保护 · {{ g.protectedNode.fileCount }} 个文件未索引</span>
-                  <button class="mini-btn" @click="protectAdd(g.protectedNode)">加入索引</button>
+                  <template v-if="pendingProtect !== g.prefix">
+                    <span>未加入索引 · 仅本机管理面可见 · AI 检索不到（{{ g.protectedNode.fileCount }} 个文件）</span>
+                    <button class="mini-btn" @click="pendingProtect = g.prefix">加入索引</button>
+                  </template>
+                  <template v-else>
+                    <span>确认开放？这 {{ g.protectedNode.fileCount }} 个文件会进入检索、被会话读到</span>
+                    <span class="tree-confirm">
+                      <button class="mini-btn danger" @click="protectAdd(g.protectedNode)">确认加入</button>
+                      <button class="mini-btn" @click="pendingProtect = null">取消</button>
+                    </span>
+                  </template>
                 </div>
+
                 <ul v-if="g.files.length" class="tree-files">
-                  <li v-for="n in g.files" :key="n.path" class="tree-file" :class="n.status">
+                  <li
+                    v-for="n in g.files"
+                    :key="n.path"
+                    class="tree-file"
+                    :class="[n.status, { unindexed: isUnindexed(n) }]"
+                  >
                     <span class="tree-dot" aria-hidden="true"></span>
-                    <span class="tree-path" :title="n.path">{{ relPath(n.path) }}</span>
-                    <span v-if="n.status === 'excluded'" class="tree-rule" :title="'来源规则：' + (n.rule || '')">已排除</span>
+                    <span class="tree-path" :title="n.path">{{ n.show }}</span>
+                    <span v-if="isUnindexed(n)" class="tree-rule" :title="n.rule">未索引</span>
+                    <span v-else-if="n.status === 'excluded'" class="tree-rule" :title="'来源规则：' + (n.rule || '')">已排除</span>
                   </li>
                 </ul>
               </div>
@@ -1058,7 +1083,7 @@ onMounted(async () => {
           </section>
 
           <p v-if="ragError" class="rag-error">{{ ragError }}</p>
-          <p class="rag-note">提示：排除/锁定只作用于检索层，历史消息与已有对话记忆不受影响。</p>
+          <p class="rag-note">提示：持密钥即可看到库内全部笔记文件名；「未加入索引 / 已排除」只作用于检索层（AI 问不到），历史消息与已有对话记忆不受影响。</p>
         </template>
       </div>
     </div>
